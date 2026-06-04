@@ -1,0 +1,6 @@
+ALL_ZONES = [
+    "SKINCARE",
+    "FRAGRANCE",
+    "MAKEUP",
+    "HAIRCARE"
+]
