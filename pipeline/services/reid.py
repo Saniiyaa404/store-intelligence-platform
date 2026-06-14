@@ -2,58 +2,18 @@ import cv2
 import numpy as np
 from datetime import datetime
 
+from services.reid_engine import (
+    get_histogram,
+    appearance_similarity
+)
+
+from services.identity_manager import (
+    identity_manager
+)
 
 GLOBAL_VISITOR_COUNTER = 1
 
-TRACK_TO_GLOBAL = {}
-
 RECENT_EXITS = []
-
-LAST_SEEN = {}
-
-def get_histogram(crop):
-
-    if crop.size == 0:
-        return None
-
-    hsv = cv2.cvtColor(
-        crop,
-        cv2.COLOR_BGR2HSV
-    )
-
-    hist = cv2.calcHist(
-        [hsv],
-        [0, 1],
-        None,
-        [16, 16],
-        [0, 180, 0, 256]
-    )
-
-    cv2.normalize(
-        hist,
-        hist
-    )
-
-    return hist.flatten()
-
-
-def appearance_similarity(
-    hist1,
-    hist2
-):
-
-    if hist1 is None:
-        return 0
-
-    if hist2 is None:
-        return 0
-
-    return cv2.compareHist(
-        hist1.astype("float32"),
-        hist2.astype("float32"),
-        cv2.HISTCMP_CORREL
-    )
-
 
 def create_global_id():
 
@@ -76,16 +36,17 @@ def get_global_visitor_id(
     timestamp
 ):
 
-    global TRACK_TO_GLOBAL
 
-    key = (
-        camera_id,
-        track_id
+    visitor_id = (
+        identity_manager.get_visitor_for_track(
+            camera_id,
+            track_id
+        )
     )
 
-    if key in TRACK_TO_GLOBAL:
+    if visitor_id is not None:
 
-        return TRACK_TO_GLOBAL[key]
+        return visitor_id
 
     hist = get_histogram(
         crop
@@ -152,9 +113,11 @@ def get_global_visitor_id(
             create_global_id()
         )
 
-    TRACK_TO_GLOBAL[
-        key
-    ] = visitor_id
+    identity_manager.assign_track(
+        camera_id,
+        track_id,
+        visitor_id
+    )
 
     return visitor_id
 
@@ -165,21 +128,25 @@ def update_track_state(
     timestamp
 ):
 
-    key = (
-        camera_id,
-        track_id
+    visitor_id = (
+        identity_manager.get_visitor_for_track(
+            camera_id,
+            track_id
+        )
     )
 
-    LAST_SEEN[key] = {
+    if visitor_id is None:
+        return
+    
+    hist = get_histogram(
+        crop
+    )
 
-        "timestamp":
-        timestamp,
-
-        "hist":
-        get_histogram(
-            crop
-        )
-    }
+    identity_manager.update_active_visitor(
+        visitor_id,
+        hist,
+        timestamp
+    )
 
 
 def register_track_exit(
@@ -192,30 +159,45 @@ def register_track_exit(
         track_id
     )
 
-    if key not in LAST_SEEN:
-        return
+    visitor_id = (
+        identity_manager.get_visitor_for_track(
+            camera_id,
+            track_id
+        )
+    )
 
-    if key not in TRACK_TO_GLOBAL:
+    if visitor_id is None:
         return
+    
+    visitor_data = (
+        identity_manager.get_visitor_data(
+            visitor_id
+        )
+    )
+
+    if visitor_data is None:
+        return
+    
+    print(visitor_data)
     
     print(
         f"EXIT SAVED "
-        f"{TRACK_TO_GLOBAL[key]}"
+        f"{visitor_id}"
     )
 
     RECENT_EXITS.append({
 
         "visitor_id":
-        TRACK_TO_GLOBAL[key],
+        visitor_id,
 
         "camera_id":
         camera_id,
 
         "timestamp":
-        LAST_SEEN[key]["timestamp"],
+        visitor_data["last_seen"],
 
         "hist":
-        LAST_SEEN[key]["hist"]
+        visitor_data["embedding"]
     })
 
     if len(RECENT_EXITS) > 100:

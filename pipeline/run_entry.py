@@ -1,13 +1,14 @@
 import cv2
 import supervision as sv
 
-from detect import detect
-from tracker import create_tracker
-from tracker import track
+from services.detect import detect
+from services.tracker import create_tracker
+from services.tracker import track
 from config import CAMERA_CONFIG
-from events import create_event, save_event
+from services.events import create_event, save_event
+from processors.entry_processor import EntryProcessor
 
-from reid import (
+from services.reid import (
     get_global_visitor_id,
     update_track_state
 )
@@ -33,13 +34,16 @@ def run_entry_camera(camera_key):
         camera_config["video"]
     )
 
-    entered = set()
-    previous_y = {}
+
     staff_tracks = {}
 
     ENTRY_LINE_Y = camera_config[
         "entry_line_y"
     ]
+    processor = EntryProcessor(
+        ENTRY_LINE_Y
+    )
+
     frame_count = 0
 
     print(cap.isOpened())
@@ -162,11 +166,16 @@ def run_entry_camera(camera_key):
                         timestamp=timestamp
                     )
 
-                    if track_id not in previous_y:
+                    old_y = processor.update_position(
+                        track_id,
+                        foot_y
+                    )
 
-                        previous_y[track_id] = foot_y
-
-                    old_y = previous_y[track_id]
+                    event_type = processor.check_crossing(
+                        track_id,
+                        old_y,
+                        foot_y
+                    )
 
                     print(
                         f"ID={track_id} "
@@ -182,18 +191,18 @@ def run_entry_camera(camera_key):
                             f"Y={foot_y}"
                         )
 
-                    if old_y < ENTRY_LINE_Y and \
-                        foot_y > ENTRY_LINE_Y and \
-                        track_id not in entered:
+                    if event_type == "STORE_ENTER":
                             
-                            if staff_flag:
-                                continue
+                        if processor.should_ignore(
+                            staff_flag
+                        ):
+                            continue
 
-                            print(
+                        print(
                                 f"ID={track_id} STORE_ENTER"
-                            )
+                        )
 
-                            event = create_event(
+                        event = create_event(
                                 visitor_id=global_visitor_id,
                                 event_type="STORE_ENTER",
                                 zone_id=None,
@@ -205,15 +214,14 @@ def run_entry_camera(camera_key):
                                 is_staff=staff_flag
                             )
 
-                            save_event(event)
+                        save_event(event)
 
-                            entered.add(track_id)
 
-                    elif old_y > ENTRY_LINE_Y and \
-                        foot_y < ENTRY_LINE_Y and \
-                        track_id in entered:
+                    elif event_type == "STORE_EXIT":
 
-                        if staff_flag:
+                        if processor.should_ignore(
+                            staff_flag
+                        ):
                             continue
 
                         print(
@@ -234,9 +242,6 @@ def run_entry_camera(camera_key):
 
                         save_event(event)
 
-                        entered.remove(track_id)
-
-                    previous_y[track_id] = foot_y
 
                     cv2.putText(
                         frame,
@@ -257,10 +262,10 @@ def run_entry_camera(camera_key):
         )
             
         #show video by opening window
-        # cv2.imshow("Phase 1", frame)
+        cv2.imshow("Phase 1", frame)
 
-        # if cv2.waitKey(1) == 27:
-        #     break
+        if cv2.waitKey(1) == 27:
+            break
 
     cap.release()
     cv2.destroyAllWindows()

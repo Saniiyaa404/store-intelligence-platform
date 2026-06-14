@@ -2,20 +2,26 @@ import cv2
 import supervision as sv
 
 from config import CAMERA_CONFIG
-from events import create_event, save_event
+from services.events import create_event, save_event
 from queue_zones import QUEUE_ZONES
 
-from detect import detect
-from tracker import create_tracker
-from tracker import track
+from services.detect import detect
+from services.tracker import create_tracker
+from services.tracker import track
 
-from reid import (
+from services.reid import (
     get_global_visitor_id,
     update_track_state
 )
 from datetime import datetime
 from datetime import timezone
 from staff import is_staff
+
+from processors.billing_processor import (
+    BillingProcessor
+)
+
+processor = BillingProcessor()
 
 def get_queue_type(camera_id, x, y):
 
@@ -178,7 +184,9 @@ def run_billing_camera(camera_key):
 
                     queue_depth += 1
 
-                    if track_id not in queue_entered:
+                    if not processor.has_entered_queue(
+                        track_id
+                    ):
 
                         event = create_event(
                             visitor_id=global_visitor_id,
@@ -198,26 +206,41 @@ def run_billing_camera(camera_key):
 
                         save_event(event)
 
-                        queue_entered.add(track_id)
+                        processor.mark_queue_entered(track_id)
 
                         print(
                             f"QUEUE_ENTER VISITOR={track_id}"
                         )
 
-                    if track_id is not None:
+                        if track_id is not None:
 
-                        if track_id not in queue_entry_frame:
+                            if (
+                                processor.get_queue_entry_frame(
+                                    track_id
+                                ) is None
+                            ):
 
-                            queue_entry_frame[track_id] = frame_count
+                                processor.set_queue_entry_frame(
+                                    track_id,
+                                    frame_count
+                                )
+
+                        entry_frame = (
+                            processor.get_queue_entry_frame(
+                                track_id
+                            )
+                        )
 
                         time_in_queue = (
                             frame_count -
-                            queue_entry_frame[track_id]
+                            entry_frame
                         ) / fps
 
                         if (
                             time_in_queue >= 2
-                            and track_id not in purchase_done
+                            and not processor.purchase_completed(
+                                track_id
+                            )
                         ):
 
                             print(
@@ -244,18 +267,18 @@ def run_billing_camera(camera_key):
 
                             save_event(event)
 
-                            purchase_done.add(track_id)
-
+                            processor.mark_purchase_completed(
+                                track_id
+                            )
                 else:
 
                     if tracked.tracker_id is not None:
 
                         track_id = tracked.tracker_id[i]
 
-                        if track_id in queue_entry_frame:
-
-                            del queue_entry_frame[track_id]
-
+                        processor.clear_queue_entry_frame(
+                            track_id
+                        )
                 
                 cv2.putText(
                         frame,

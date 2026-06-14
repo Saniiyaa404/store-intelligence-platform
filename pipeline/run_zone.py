@@ -2,14 +2,14 @@ import cv2
 import supervision as sv
 
 from config import CAMERA_CONFIG
-from events import create_event, save_event
+from services.events import create_event, save_event
 from zones import get_zone, CAMERA_ZONES
 
-from detect import detect
-from tracker import create_tracker
-from tracker import track
+from services.detect import detect
+from services.tracker import create_tracker
+from services.tracker import track
 
-from reid import (
+from services.reid import (
     get_global_visitor_id,
     update_track_state,
     register_track_exit
@@ -40,13 +40,11 @@ def run_zone_camera(camera_key):
         "confirmation_frames"
     ]
 
-    entry_frame = {}
-    visitor_current_zone = {}
-    pending_exit = {}
-    last_zone = {}
-    session_seq = {}
-    zone_candidate = {}
-    zone_candidate_count = {}
+    from processors.zone_processor import ZoneProcessor
+    processor = ZoneProcessor(
+        confirmation_frames
+    )
+
     staff_tracks = {}
 
     previous_track_ids = set()
@@ -193,32 +191,22 @@ def run_zone_camera(camera_key):
                         head_y
                     )
 
-                    if track_id not in visitor_current_zone:
-                        visitor_current_zone[track_id] = None
-
-                    previous_zone = visitor_current_zone[track_id]
-
-                    if zone is not None:
-
-                        if track_id not in zone_candidate:
-
-                            zone_candidate[track_id] = zone
-                            zone_candidate_count[track_id] = 1
-
-                        elif zone_candidate[track_id] == zone:
-
-                            zone_candidate_count[track_id] += 1
-
-                        else:
-
-                            zone_candidate[track_id] = zone
-                            zone_candidate_count[track_id] = 1
-
-                        print(
-                            f"ID={track_id} "
-                            f"CAND={zone_candidate.get(track_id)} "
-                            f"COUNT={zone_candidate_count.get(track_id,0)}"
+                    previous_zone = (
+                        processor.get_current_zone(
+                            track_id
                         )
+                    )
+
+                    processor.update_zone_candidate(
+                        track_id,
+                        zone
+                    )
+
+                    print(
+                        f"ID={track_id} "
+                        f"CAND={processor.zone_candidate.get(track_id)} "
+                        f"COUNT={processor.zone_candidate_count.get(track_id,0)}"
+                    )
 
                     # if track_id not in entry_frame:
                     #     entry_frame[track_id] = frame_number
@@ -229,20 +217,24 @@ def run_zone_camera(camera_key):
                         f"CAND={zone}"
                     )
 
-                    if track_id in pending_exit and zone is not None:
-                        del pending_exit[track_id]
+                    if (
+                        processor.is_pending_exit(track_id)
+                        and zone is not None
+                    ):
+                        processor.clear_pending_exit(
+                            track_id
+                        )
 
                     # ENTER EVENT
 
                     if previous_zone is None and \
                     zone is not None and \
-                    zone_candidate_count.get(track_id, 0) >= confirmation_frames:
+                    processor.is_zone_confirmed(track_id):
 
                         print(
                             f"ID={track_id} ENTERED {zone}"
                         )
-                        if track_id not in session_seq:
-                            session_seq[track_id] = 1
+                        
 
                         event = create_event(
                             visitor_id=global_visitor_id,
@@ -250,7 +242,9 @@ def run_zone_camera(camera_key):
                             zone_id=zone,
                             dwell_ms=0,
                             confidence=float(tracked.confidence[i]),
-                            session_seq=session_seq[track_id],
+                            session_seq=processor.get_session_seq(
+                                track_id
+                            ),
                             camera_id=camera_config["camera_id"],
                             store_id=camera_config["store_id"],
                             is_staff=bool(staff_flag)
@@ -258,11 +252,15 @@ def run_zone_camera(camera_key):
 
                         save_event(event)
 
-                        entry_frame[track_id] = frame_number
-                        zone_candidate_count[track_id] = 0
-                        visitor_current_zone[track_id] = zone
-                        last_zone[track_id] = zone
+                        processor.reset_zone_candidate(
+                            track_id
+                        )
 
+                        processor.start_zone_visit(
+                            track_id,
+                            zone,
+                            frame_number
+                        )
 
                     # ZONE CHANGE
 
@@ -275,7 +273,7 @@ def run_zone_camera(camera_key):
                             f"{previous_zone} -> {zone}"
                         )
 
-                        enter_frame = entry_frame.get(
+                        enter_frame = processor.get_entry_frame(
                             track_id,
                             frame_number
                         )
@@ -290,7 +288,7 @@ def run_zone_camera(camera_key):
                             zone_id=previous_zone,
                             dwell_ms=int(dwell_seconds * 1000),
                             confidence=float(tracked.confidence[i]),
-                            session_seq=session_seq.get(track_id, 1),
+                            session_seq=processor.get_session_seq(track_id),
                             camera_id=camera_config["camera_id"],
                             store_id=camera_config["store_id"],
                             is_staff=staff_flag
@@ -298,7 +296,9 @@ def run_zone_camera(camera_key):
 
                         save_event(exit_event)
 
-                        session_seq[track_id] += 1
+                        processor.increment_session_seq(
+                            track_id
+                        )
 
                         enter_event = create_event(
                             visitor_id=global_visitor_id,
@@ -306,7 +306,7 @@ def run_zone_camera(camera_key):
                             zone_id=zone,
                             dwell_ms=0,
                             confidence=float(tracked.confidence[i]),
-                            session_seq=session_seq.get(track_id, 1),
+                            session_seq=processor.get_session_seq(track_id),
                             camera_id=camera_config["camera_id"],
                             store_id=camera_config["store_id"],
                             is_staff=staff_flag
@@ -314,7 +314,9 @@ def run_zone_camera(camera_key):
 
                         save_event(enter_event)
 
-                        session_seq[track_id] += 1
+                        processor.increment_session_seq(
+                            track_id
+                        )
 
                         print(
                             f"ID={track_id} EXITED "
@@ -329,16 +331,22 @@ def run_zone_camera(camera_key):
                             f"ID={track_id} ENTERED {zone}"
                         )
 
-                        entry_frame[track_id] = frame_number
-                        visitor_current_zone[track_id] = zone
-                        last_zone[track_id] = zone
+                        processor.start_zone_visit(
+                            track_id,
+                            zone,
+                            frame_number
+                        )
 
                     #EXIT
                     elif previous_zone is not None and zone is None:
 
-                        if track_id not in pending_exit:
-
-                            pending_exit[track_id] = frame_number
+                        if not processor.is_pending_exit(
+                            track_id
+                        ):
+                            processor.mark_pending_exit(
+                                track_id,
+                                frame_number
+                            )
 
 
                     #draw id on screen near center point
@@ -375,9 +383,13 @@ def run_zone_camera(camera_key):
 
 
         #FINAL EXIT
-        for track_id in list(pending_exit.keys()):
+        for track_id in list(processor.get_pending_exit_tracks()):
 
-            exit_frame = pending_exit[track_id]
+            exit_frame = (
+                processor.get_pending_exit_frame(
+                    track_id
+                )
+            )
 
             if frame_number - exit_frame >= 30:
 
@@ -385,11 +397,13 @@ def run_zone_camera(camera_key):
                     f"ID={track_id} FINAL EXIT"
                 )
 
-                zone_name = last_zone.get(track_id)
+                zone_name = processor.get_last_zone(
+                    track_id
+                )
 
                 if zone_name is not None:
 
-                    enter_frame = entry_frame.get(
+                    enter_frame = processor.get_entry_frame(
                         track_id,
                         frame_number
                     )
@@ -403,7 +417,7 @@ def run_zone_camera(camera_key):
                         event_type="ZONE_EXIT",
                         zone_id=zone_name,
                         dwell_ms=int(dwell_seconds * 1000),
-                        session_seq=session_seq.get(track_id, 1),
+                        session_seq=processor.get_session_seq(track_id),
                         camera_id=camera_config["camera_id"],
                         store_id=camera_config["store_id"],
                         is_staff=staff_flag
@@ -411,16 +425,17 @@ def run_zone_camera(camera_key):
 
                     save_event(event)
 
-                print(f"BEFORE DELETE: {pending_exit.keys()}")
+                # print(f"BEFORE DELETE: {pending_exit.keys()}")
 
-                del pending_exit[track_id]
+                processor.clear_pending_exit(
+                    track_id
+                )
 
-                print(f"AFTER DELETE: {pending_exit.keys()}") 
+                # print(f"AFTER DELETE: {pending_exit.keys()}") 
 
-                visitor_current_zone[track_id] = None
-
-                if track_id in entry_frame:
-                    del entry_frame[track_id]
+                processor.clear_zone_visit(
+                    track_id
+                )
 
         from zones import CAMERA_ZONES
 
@@ -447,5 +462,5 @@ def run_zone_camera(camera_key):
 if __name__ == "__main__":
 
     run_zone_camera(
-        "STORE2_CAM1"
+        "STORE1_CAM2"
     )
