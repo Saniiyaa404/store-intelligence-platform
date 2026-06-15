@@ -47,7 +47,8 @@ class IdentityManager:
         self,
         visitor_id,
         embedding,
-        timestamp
+        timestamp,
+        osnet_embedding=None
     ):
 
         self.active_visitors[
@@ -55,6 +56,9 @@ class IdentityManager:
         ] = {
 
             "embedding": embedding,
+
+            "osnet_embedding":
+            osnet_embedding,
 
             "last_seen": timestamp,
 
@@ -173,18 +177,43 @@ class IdentityManager:
         ]["embedding"]
     
 
-    def update_visitor_embedding(
+    def update_active_visitor(
         self,
         visitor_id,
-        embedding
+        embedding,
+        timestamp,
+        osnet_embedding=None
     ):
 
         if visitor_id not in self.active_visitors:
+
+            self.add_active_visitor(
+                visitor_id,
+                embedding,
+                timestamp,
+                osnet_embedding
+            )
+
             return
 
         self.active_visitors[
             visitor_id
         ]["embedding"] = embedding
+
+        self.update_visitor_embedding(
+            visitor_id,
+            embedding
+        )
+
+        self.update_osnet_embedding(
+            visitor_id,
+            osnet_embedding
+        )
+
+        self.update_last_seen(
+            visitor_id,
+            timestamp
+        )
         
 
     def get_active_visitors(self):
@@ -220,31 +249,32 @@ class IdentityManager:
         )
     
 
-    def update_active_visitor(
+    def update_visitor_embedding(
         self,
         visitor_id,
-        embedding,
-        timestamp
+        embedding
     ):
 
         if visitor_id not in self.active_visitors:
-
-            self.add_active_visitor(
-                visitor_id,
-                embedding,
-                timestamp
-            )
-
             return
 
-        self.update_visitor_embedding(
-            visitor_id,
-            embedding
-        )
+        self.active_visitors[
+            visitor_id
+        ]["embedding"] = embedding
 
-        self.update_last_seen(
-            visitor_id,
-            timestamp
+    def update_osnet_embedding(
+        self,
+        visitor_id,
+        osnet_embedding
+    ):
+
+        if visitor_id not in self.active_visitors:
+            return
+
+        self.active_visitors[
+            visitor_id
+        ]["osnet_embedding"] = (
+            osnet_embedding
         )
 
 identity_manager = IdentityManager()

@@ -48,9 +48,7 @@ def get_global_visitor_id(
 
         return visitor_id
 
-    hist = get_histogram(
-        crop
-    )
+    hist = get_histogram(crop)
 
     best_match = None
 
@@ -72,6 +70,19 @@ def get_global_visitor_id(
         score = appearance_similarity(
             hist,
             candidate["hist"]
+        )
+
+        #temporarily addn
+        # osnet_score = cosine_similarity(
+        #     osnet_embedding,
+        #     candidate.get(
+        #         "osnet_embedding"
+        #     )
+        # )
+
+        print(
+            f"HIST={score:.3f} "
+            # f"OSNET={osnet_score:.3f}"
         )
 
         if score > best_score:
